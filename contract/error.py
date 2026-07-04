@@ -74,3 +74,19 @@ def err_invalid_amount() -> PluginError:
 
 def err_tx_fee_below_state_limit() -> PluginError:
     return PluginError(14, DEFAULT_MODULE, "tx.fee is below state limit")
+
+
+def err_invalid_content_hash() -> PluginError:
+    return PluginError(15, DEFAULT_MODULE, "content hash is invalid")
+
+
+def err_invalid_score() -> PluginError:
+    return PluginError(16, DEFAULT_MODULE, "score must be between 0 and 100")
+
+
+def err_invalid_model_name() -> PluginError:
+    return PluginError(17, DEFAULT_MODULE, "model name is invalid")
+
+
+def err_invalid_evaluation_id() -> PluginError:
+    return PluginError(18, DEFAULT_MODULE, "evaluation id is invalid")

@@ -49,6 +49,10 @@ from .error import (
     err_tx_fee_below_state_limit,
     err_invalid_message_cast,
     err_unmarshal,
+    err_invalid_content_hash,
+    err_invalid_score,
+    err_invalid_model_name,
+    err_invalid_evaluation_id,
 )
 
 
@@ -214,6 +218,18 @@ class Contract:
                 msg = MessageSend()
                 msg.ParseFromString(request.tx.msg.value)
                 return self._check_message_send(msg)
+            elif type_url.endswith("/types.MessageRegisterEvaluator"):
+                msg = MessageRegisterEvaluator()
+                msg.ParseFromString(request.tx.msg.value)
+                return self._check_message_register_evaluator(msg)
+            elif type_url.endswith("/types.MessageSubmitEvaluationRequest"):
+                msg = MessageSubmitEvaluationRequest()
+                msg.ParseFromString(request.tx.msg.value)
+                return self._check_message_submit_evaluation_request(msg)
+            elif type_url.endswith("/types.MessageSubmitAiVerdict"):
+                msg = MessageSubmitAiVerdict()
+                msg.ParseFromString(request.tx.msg.value)
+                return self._check_message_submit_ai_verdict(msg)
             else:
                 raise err_invalid_message_cast()
 
@@ -277,6 +293,46 @@ class Contract:
         response = PluginCheckResponse()
         response.recipient = msg.to_address
         response.authorized_signers.append(msg.from_address)
+        return response
+
+    def _check_message_register_evaluator(self, msg: MessageRegisterEvaluator) -> PluginCheckResponse:
+        """Statelessly validates a 'register_evaluator' message."""
+        if len(msg.admin_address) != 20:
+            raise err_invalid_address()
+        if len(msg.evaluator_address) != 20:
+            raise err_invalid_address()
+        if not msg.model_name or len(msg.model_name) == 0:
+            raise err_invalid_model_name()
+
+        response = PluginCheckResponse()
+        response.recipient = msg.evaluator_address
+        response.authorized_signers.append(msg.admin_address)
+        return response
+
+    def _check_message_submit_evaluation_request(self, msg: MessageSubmitEvaluationRequest) -> PluginCheckResponse:
+        """Statelessly validates a 'submit_evaluation_request' message."""
+        if len(msg.submitter_address) != 20:
+            raise err_invalid_address()
+        if not msg.content_hash or len(msg.content_hash) == 0:
+            raise err_invalid_content_hash()
+        if msg.required_verdicts == 0:
+            raise err_invalid_amount()
+
+        response = PluginCheckResponse()
+        response.authorized_signers.append(msg.submitter_address)
+        return response
+
+    def _check_message_submit_ai_verdict(self, msg: MessageSubmitAiVerdict) -> PluginCheckResponse:
+        """Statelessly validates a 'submit_ai_verdict' message."""
+        if len(msg.evaluator_address) != 20:
+            raise err_invalid_address()
+        if not msg.evaluation_id or len(msg.evaluation_id) == 0:
+            raise err_invalid_evaluation_id()
+        if msg.score > 100:
+            raise err_invalid_score()
+
+        response = PluginCheckResponse()
+        response.authorized_signers.append(msg.evaluator_address)
         return response
 
     async def _deliver_message_send(self, msg: MessageSend, fee: int) -> PluginDeliverResponse:
