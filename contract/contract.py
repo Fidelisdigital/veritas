@@ -25,6 +25,9 @@ from .proto import (
     PluginEndRequest,
     PluginEndResponse,
     MessageSend,
+    MessageRegisterEvaluator,
+    MessageSubmitEvaluationRequest,
+    MessageSubmitAiVerdict,
     PluginKeyRead,
     PluginStateReadRequest,
     PluginStateWriteRequest,
@@ -50,15 +53,23 @@ from .error import (
 
 
 # Plugin configuration (matching Go's ContractConfig)
+EVALUATOR_PREFIX = b"\x64"    # 100
+EVALUATION_PREFIX = b"\x65"   # 101
+REPUTATION_PREFIX = b"\x66"   # 102
+
 CONTRACT_CONFIG = {
     "name": "python_plugin_contract",
     "id": 1,
     "version": 1,
-    "supported_transactions": ["send"],
+    "supported_transactions": ["send", "register_evaluator", "submit_evaluation_request", "submit_ai_verdict"],
     "transaction_type_urls": [
         "type.googleapis.com/types.MessageSend",
+        "type.googleapis.com/types.MessageRegisterEvaluator",
+        "type.googleapis.com/types.MessageSubmitEvaluationRequest",
+        "type.googleapis.com/types.MessageSubmitAiVerdict",
     ],
     "event_type_urls": [],
+    "custom_state_prefixes": [EVALUATOR_PREFIX, EVALUATION_PREFIX, REPUTATION_PREFIX],
     # Include google/protobuf/any.proto first as it's a dependency of event.proto and tx.proto
     "file_descriptor_protos": [
         any_pb2.DESCRIPTOR.serialized_pb,

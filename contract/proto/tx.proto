@@ -54,3 +54,26 @@ message Signature {
   // signature: the bytes of the signature output from a private key which may be verified with the message and public
   bytes signature = 2;
 }
+
+// MessageRegisterEvaluator whitelists a trusted AI model/feeder address
+message MessageRegisterEvaluator {
+  bytes admin_address = 1;      // @gotags: json:"adminAddress"
+  bytes evaluator_address = 2;  // @gotags: json:"evaluatorAddress"
+  string model_name = 3;        // @gotags: json:"modelName"
+}
+
+// MessageSubmitEvaluationRequest creates a new evaluation record on-chain
+message MessageSubmitEvaluationRequest {
+  bytes submitter_address = 1;   // @gotags: json:"submitterAddress"
+  string content_hash = 2;       // @gotags: json:"contentHash"
+  double anomaly_score = 3;      // @gotags: json:"anomalyScore"
+  uint64 required_verdicts = 4;  // @gotags: json:"requiredVerdicts"
+}
+
+// MessageSubmitAiVerdict posts one evaluator's judgment on an evaluation
+message MessageSubmitAiVerdict {
+  bytes evaluator_address = 1;  // @gotags: json:"evaluatorAddress"
+  string evaluation_id = 2;     // @gotags: json:"evaluationId"
+  uint64 score = 3;             // @gotags: json:"score"
+  string justification = 4;     // @gotags: json:"justification"
+}
