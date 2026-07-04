@@ -77,3 +77,35 @@ message MessageSubmitAiVerdict {
   uint64 score = 3;             // @gotags: json:"score"
   string justification = 4;     // @gotags: json:"justification"
 }
+
+// Verdict represents one evaluator's judgment within an Evaluation
+message Verdict {
+  bytes evaluator_address = 1;  // @gotags: json:"evaluatorAddress"
+  uint64 score = 2;             // @gotags: json:"score"
+  string justification = 3;     // @gotags: json:"justification"
+}
+
+// Evaluator is a whitelisted AI model/feeder record
+message Evaluator {
+  bytes evaluator_address = 1;  // @gotags: json:"evaluatorAddress"
+  string model_name = 2;        // @gotags: json:"modelName"
+  bool active = 3;               // @gotags: json:"active"
+}
+
+// Evaluation is the on-chain record of a submitted evaluation request
+message Evaluation {
+  string content_hash = 1;         // @gotags: json:"contentHash"
+  bytes submitter_address = 2;     // @gotags: json:"submitterAddress"
+  double anomaly_score = 3;        // @gotags: json:"anomalyScore"
+  uint64 required_verdicts = 4;    // @gotags: json:"requiredVerdicts"
+  repeated Verdict verdicts = 5;   // @gotags: json:"verdicts"
+  string status = 6;               // @gotags: json:"status"  pending | finalized | flagged
+  uint64 final_score = 7;          // @gotags: json:"finalScore"
+}
+
+// Reputation is the persistent on-chain trust score for a wallet
+message Reputation {
+  bytes wallet_address = 1;  // @gotags: json:"walletAddress"
+  uint64 score = 2;          // @gotags: json:"score"
+  uint64 last_updated = 3;   // @gotags: json:"lastUpdated"
+}
