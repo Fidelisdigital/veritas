@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+canopy_plugin_python.egg-info/PKG-INFO
+canopy_plugin_python.egg-info/SOURCES.txt
+canopy_plugin_python.egg-info/dependency_links.txt
+canopy_plugin_python.egg-info/entry_points.txt
+canopy_plugin_python.egg-info/requires.txt
+canopy_plugin_python.egg-info/top_level.txt
+tests/test_config.py
+tests/test_contract.py
