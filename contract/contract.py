@@ -28,6 +28,10 @@ from .proto import (
     MessageRegisterEvaluator,
     MessageSubmitEvaluationRequest,
     MessageSubmitAiVerdict,
+    Evaluator,
+    Evaluation,
+    Verdict,
+    Reputation,
     PluginKeyRead,
     PluginStateReadRequest,
     PluginStateWriteRequest,
@@ -53,6 +57,10 @@ from .error import (
     err_invalid_score,
     err_invalid_model_name,
     err_invalid_evaluation_id,
+    err_evaluation_already_exists,
+    err_evaluation_not_found,
+    err_evaluation_not_pending,
+    err_evaluator_not_registered,
 )
 
 
@@ -128,6 +136,31 @@ def key_for_fee_params() -> bytes:
 def key_for_fee_pool(chain_id: int) -> bytes:
     """Generate state database key for fee pool."""
     return join_len_prefix(POOL_PREFIX, format_uint64(chain_id))
+
+
+def key_for_evaluator(address: bytes) -> bytes:
+    """Generate state database key for an evaluator record."""
+    return join_len_prefix(EVALUATOR_PREFIX, address)
+
+
+def key_for_evaluation(content_hash: str) -> bytes:
+    """Generate state database key for an evaluation record."""
+    return join_len_prefix(EVALUATION_PREFIX, content_hash.encode("utf-8"))
+
+
+def key_for_reputation(address: bytes) -> bytes:
+    """Generate state database key for a reputation record."""
+    return join_len_prefix(REPUTATION_PREFIX, address)
+
+
+def is_consensus(scores: list, tolerance: int = 15) -> bool:
+    """
+    Checks whether a list of verdict scores (0-100) agree within tolerance.
+    Consensus is reached if the spread (max - min) is within the tolerance band.
+    """
+    if not scores:
+        return False
+    return (max(scores) - min(scores)) <= tolerance
 
 
 # Proto marshal/unmarshal utilities
@@ -255,6 +288,18 @@ class Contract:
                 msg = MessageSend()
                 msg.ParseFromString(request.tx.msg.value)
                 return await self._deliver_message_send(msg, request.tx.fee)
+            elif type_url.endswith("/types.MessageRegisterEvaluator"):
+                msg = MessageRegisterEvaluator()
+                msg.ParseFromString(request.tx.msg.value)
+                return await self._deliver_message_register_evaluator(msg)
+            elif type_url.endswith("/types.MessageSubmitEvaluationRequest"):
+                msg = MessageSubmitEvaluationRequest()
+                msg.ParseFromString(request.tx.msg.value)
+                return await self._deliver_message_submit_evaluation_request(msg)
+            elif type_url.endswith("/types.MessageSubmitAiVerdict"):
+                msg = MessageSubmitAiVerdict()
+                msg.ParseFromString(request.tx.msg.value)
+                return await self._deliver_message_submit_ai_verdict(msg)
             else:
                 raise err_invalid_message_cast()
 
@@ -435,6 +480,182 @@ class Contract:
                     ],
                 ),
             )
+
+        result = PluginDeliverResponse()
+        if write_resp.HasField("error"):
+            result.error.CopyFrom(write_resp.error)
+        return result
+
+
+    async def _deliver_message_register_evaluator(self, msg: MessageRegisterEvaluator) -> PluginDeliverResponse:
+        """DeliverMessageRegisterEvaluator whitelists a new AI evaluator/feeder."""
+        if not self.plugin or not self.config:
+            raise PluginError(1, "plugin", "plugin or config not initialized")
+
+        evaluator_key = key_for_evaluator(msg.evaluator_address)
+
+        evaluator_record = Evaluator()
+        evaluator_record.evaluator_address = msg.evaluator_address
+        evaluator_record.model_name = msg.model_name
+        evaluator_record.active = True
+
+        write_resp = await self.plugin.state_write(
+            self,
+            PluginStateWriteRequest(
+                sets=[PluginSetOp(key=evaluator_key, value=marshal(evaluator_record))],
+            ),
+        )
+
+        result = PluginDeliverResponse()
+        if write_resp.HasField("error"):
+            result.error.CopyFrom(write_resp.error)
+        return result
+
+    async def _deliver_message_submit_evaluation_request(self, msg: MessageSubmitEvaluationRequest) -> PluginDeliverResponse:
+        """DeliverMessageSubmitEvaluationRequest creates a new pending evaluation record."""
+        if not self.plugin or not self.config:
+            raise PluginError(1, "plugin", "plugin or config not initialized")
+
+        evaluation_key = key_for_evaluation(msg.content_hash)
+
+        # Check no evaluation already exists for this content hash
+        existing_query_id = random.randint(0, 2**53)
+        read_resp = await self.plugin.state_read(
+            self,
+            PluginStateReadRequest(
+                keys=[PluginKeyRead(query_id=existing_query_id, key=evaluation_key)]
+            ),
+        )
+        if read_resp.HasField("error"):
+            result = PluginDeliverResponse()
+            result.error.CopyFrom(read_resp.error)
+            return result
+
+        for resp in read_resp.results:
+            if resp.query_id == existing_query_id and resp.entries:
+                raise err_evaluation_already_exists()
+
+        evaluation = Evaluation()
+        evaluation.content_hash = msg.content_hash
+        evaluation.submitter_address = msg.submitter_address
+        evaluation.anomaly_score = msg.anomaly_score
+        evaluation.required_verdicts = msg.required_verdicts
+        evaluation.status = "pending"
+        evaluation.final_score = 0
+
+        write_resp = await self.plugin.state_write(
+            self,
+            PluginStateWriteRequest(
+                sets=[PluginSetOp(key=evaluation_key, value=marshal(evaluation))],
+            ),
+        )
+
+        result = PluginDeliverResponse()
+        if write_resp.HasField("error"):
+            result.error.CopyFrom(write_resp.error)
+        return result
+
+    async def _deliver_message_submit_ai_verdict(self, msg: MessageSubmitAiVerdict) -> PluginDeliverResponse:
+        """
+        DeliverMessageSubmitAiVerdict appends one evaluator's verdict to an evaluation.
+
+        This is the core atomic operation: the moment the last required verdict
+        arrives, this SAME handler checks consensus and either finalizes the
+        evaluation (updating reputation) or flags it for dispute -- no separate
+        transaction is needed to complete this step.
+        """
+        if not self.plugin or not self.config:
+            raise PluginError(1, "plugin", "plugin or config not initialized")
+
+        evaluator_key = key_for_evaluator(msg.evaluator_address)
+        evaluation_key = key_for_evaluation(msg.evaluation_id)
+
+        eval_query_id = random.randint(0, 2**53)
+        evaluator_query_id = random.randint(0, 2**53)
+
+        read_resp = await self.plugin.state_read(
+            self,
+            PluginStateReadRequest(
+                keys=[
+                    PluginKeyRead(query_id=eval_query_id, key=evaluation_key),
+                    PluginKeyRead(query_id=evaluator_query_id, key=evaluator_key),
+                ]
+            ),
+        )
+        if read_resp.HasField("error"):
+            result = PluginDeliverResponse()
+            result.error.CopyFrom(read_resp.error)
+            return result
+
+        evaluation_bytes = None
+        evaluator_bytes = None
+        for resp in read_resp.results:
+            if resp.query_id == eval_query_id and resp.entries:
+                evaluation_bytes = resp.entries[0].value
+            elif resp.query_id == evaluator_query_id and resp.entries:
+                evaluator_bytes = resp.entries[0].value
+
+        if not evaluation_bytes:
+            raise err_evaluation_not_found()
+
+        evaluator_record = unmarshal(Evaluator, evaluator_bytes) if evaluator_bytes else None
+        if not evaluator_record or not evaluator_record.active:
+            raise err_evaluator_not_registered()
+
+        evaluation = unmarshal(Evaluation, evaluation_bytes)
+
+        if evaluation.status != "pending":
+            raise err_evaluation_not_pending()
+
+        # Append this evaluator's verdict
+        new_verdict = evaluation.verdicts.add()
+        new_verdict.evaluator_address = msg.evaluator_address
+        new_verdict.score = msg.score
+        new_verdict.justification = msg.justification
+
+        writes = []
+
+        # Auto-finalize or auto-flag the moment enough verdicts are in -- atomic, no second tx needed
+        if len(evaluation.verdicts) >= evaluation.required_verdicts:
+            scores = [v.score for v in evaluation.verdicts]
+
+            if is_consensus(scores):
+                evaluation.status = "finalized"
+                evaluation.final_score = round(sum(scores) / len(scores))
+
+                # Update reputation in the SAME handler
+                reputation_key = key_for_reputation(evaluation.submitter_address)
+                rep_query_id = random.randint(0, 2**53)
+                rep_read = await self.plugin.state_read(
+                    self,
+                    PluginStateReadRequest(
+                        keys=[PluginKeyRead(query_id=rep_query_id, key=reputation_key)]
+                    ),
+                )
+                rep_bytes = None
+                if not rep_read.HasField("error"):
+                    for resp in rep_read.results:
+                        if resp.query_id == rep_query_id and resp.entries:
+                            rep_bytes = resp.entries[0].value
+
+                reputation = unmarshal(Reputation, rep_bytes) if rep_bytes else Reputation()
+                reputation.wallet_address = evaluation.submitter_address
+                if reputation.score == 0:
+                    reputation.score = evaluation.final_score
+                else:
+                    # Simple blended running average (full time-decay is a later phase)
+                    reputation.score = round((reputation.score + evaluation.final_score) / 2)
+
+                writes.append(PluginSetOp(key=reputation_key, value=marshal(reputation)))
+            else:
+                evaluation.status = "flagged"
+
+        writes.append(PluginSetOp(key=evaluation_key, value=marshal(evaluation)))
+
+        write_resp = await self.plugin.state_write(
+            self,
+            PluginStateWriteRequest(sets=writes),
+        )
 
         result = PluginDeliverResponse()
         if write_resp.HasField("error"):

@@ -90,3 +90,19 @@ def err_invalid_model_name() -> PluginError:
 
 def err_invalid_evaluation_id() -> PluginError:
     return PluginError(18, DEFAULT_MODULE, "evaluation id is invalid")
+
+
+def err_evaluation_already_exists() -> PluginError:
+    return PluginError(19, DEFAULT_MODULE, "an evaluation with this content hash already exists")
+
+
+def err_evaluation_not_found() -> PluginError:
+    return PluginError(20, DEFAULT_MODULE, "evaluation not found")
+
+
+def err_evaluation_not_pending() -> PluginError:
+    return PluginError(21, DEFAULT_MODULE, "evaluation is no longer pending")
+
+
+def err_evaluator_not_registered() -> PluginError:
+    return PluginError(22, DEFAULT_MODULE, "evaluator is not registered or is inactive")
